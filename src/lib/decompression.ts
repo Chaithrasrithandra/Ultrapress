@@ -1,40 +1,36 @@
-// Decompression algorithm that reverses the tree-based compression
-export const decompressData = (compressedContent: string): string => {
-  try {
-    // Parse the compressed data structure
-    const parsed = JSON.parse(compressedContent);
-    
-    if (!parsed.version || !parsed.dictionary || !parsed.compressed) {
-      throw new Error("Invalid compressed file format");
-    }
+// Decompression: decode base64 gzip data and decompress using DecompressionStream
 
-    // Reconstruct the dictionary
-    const dictionary = new Map<string, string>(parsed.dictionary);
-    
-    // Reverse the dictionary (code -> original word)
-    const reverseDictionary = new Map<string, string>();
-    dictionary.forEach((code, word) => {
-      reverseDictionary.set(code, word);
-    });
-
-    // Decompress by replacing codes with original words
-    let decompressed = parsed.compressed;
-    
-    // Sort codes by length (longest first) to avoid partial replacements
-    const sortedCodes = Array.from(reverseDictionary.keys()).sort(
-      (a, b) => b.length - a.length
-    );
-
-    sortedCodes.forEach(code => {
-      const original = reverseDictionary.get(code);
-      if (original) {
-        decompressed = decompressed.split(code).join(original);
-      }
-    });
-
-    return decompressed;
-  } catch (error) {
-    console.error("Decompression error:", error);
-    throw new Error("Failed to decompress file. The file may be corrupted or in an invalid format.");
+function base64ToUint8(base64: string): Uint8Array {
+  const binaryString = atob(base64);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
   }
+  return bytes;
+}
+
+export const decompressData = async (compressedBase64: string): Promise<Uint8Array> => {
+  const compressedBytes = base64ToUint8(compressedBase64);
+
+  const ds = new DecompressionStream("gzip");
+  const writer = ds.writable.getWriter();
+  writer.write(compressedBytes as unknown as BufferSource);
+  writer.close();
+
+  const reader = ds.readable.getReader();
+  const chunks: Uint8Array[] = [];
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+
+  const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return result;
 };
