@@ -67,13 +67,7 @@ export const CompressionHistory = () => {
 
   const handleDownload = (item: HistoryItem) => {
     try {
-      // Use the original content for download since compression is simulated
-      const binaryString = atob(item.original_content);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
-      const blob = new Blob([bytes], { type: "application/octet-stream" });
+      const blob = new Blob([item.original_content], { type: "text/plain" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
