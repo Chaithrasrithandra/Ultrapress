@@ -9,15 +9,17 @@ interface CompressionResultsProps {
 
 export const CompressionResults = ({ data }: CompressionResultsProps) => {
   const handleDownload = () => {
-    // Download the compressed file with dictionary
-    const blob = new Blob([data.compressedContent], { 
-      type: "application/json" 
-    });
+    // Decode base64 original content back to binary
+    const binaryString = atob(data.originalContent);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    const blob = new Blob([bytes], { type: "application/octet-stream" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    const fileNameWithoutExt = data.fileName.replace(/\.[^/.]+$/, "");
-    a.download = `${fileNameWithoutExt}.compressed.json`;
+    a.download = data.fileName;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
