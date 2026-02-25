@@ -1,133 +1,88 @@
 import type { CompressionData } from "@/pages/Index";
 
-// Simulated tree-based compression algorithm
+// Helper: compress bytes using CompressionStream (gzip)
+async function gzipCompress(data: Uint8Array): Promise<Uint8Array> {
+  const cs = new CompressionStream("gzip");
+  const writer = cs.writable.getWriter();
+  writer.write(data as unknown as BufferSource);
+  writer.close();
+
+  const reader = cs.readable.getReader();
+  const chunks: Uint8Array[] = [];
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+
+  const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return result;
+}
+
+// Convert Uint8Array to base64 (chunk-safe)
+function uint8ToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const CHUNK_SIZE = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK_SIZE));
+  }
+  return btoa(binary);
+}
+
+// Detect redundancy in original data for analytics
+function detectRedundancy(data: Uint8Array): number {
+  // Simple byte-frequency based redundancy estimate
+  const freq = new Map<number, number>();
+  for (const byte of data) {
+    freq.set(byte, (freq.get(byte) || 0) + 1);
+  }
+  // Shannon entropy
+  const len = data.length;
+  if (len === 0) return 0;
+  let entropy = 0;
+  for (const count of freq.values()) {
+    const p = count / len;
+    entropy -= p * Math.log2(p);
+  }
+  // Max entropy for bytes is 8 bits; redundancy = how far below max
+  const maxEntropy = 8;
+  const redundancy = Math.round(((maxEntropy - entropy) / maxEntropy) * 100);
+  return Math.max(0, Math.min(redundancy, 100));
+}
+
 export const compressData = async (
-  content: string,
+  base64Content: string,
   fileName: string,
   targetCompressionLevel: number = 50,
-  targetSizeBytes?: number
+  _targetSizeBytes?: number
 ): Promise<CompressionData> => {
   const startTime = performance.now();
 
-  // Calculate original size
-  const originalSize = new Blob([content]).size;
-
-  // Build frequency tree (simplified Huffman-like approach)
-  const frequencyMap = new Map<string, number>();
-  for (const char of content) {
-    frequencyMap.set(char, (frequencyMap.get(char) || 0) + 1);
+  // Decode base64 to get original binary bytes
+  const binaryString = atob(base64Content);
+  const originalBytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) {
+    originalBytes[i] = binaryString.charCodeAt(i);
   }
 
-  // Detect redundancy (repetitive patterns)
-  const words = content.split(/\s+/);
-  const wordFrequency = new Map<string, number>();
-  words.forEach(word => {
-    wordFrequency.set(word, (wordFrequency.get(word) || 0) + 1);
-  });
-  
-  const redundantWords = Array.from(wordFrequency.entries())
-    .filter(([_, count]) => count > 2)
-    .length;
-  const redundancyDetected = Math.min(
-    Math.round((redundantWords / wordFrequency.size) * 100),
-    95
-  );
+  const originalSize = originalBytes.length;
 
-  // Simulate compression using dictionary encoding and RLE
-  let compressed = "";
-  const dictionary = new Map<string, string>();
-  let dictIndex = 0;
+  // Detect redundancy for analytics
+  const redundancyDetected = detectRedundancy(originalBytes);
 
-  // Create dictionary for common words
-  const commonWords = Array.from(wordFrequency.entries())
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, Math.min(50, wordFrequency.size));
+  // Compress using gzip
+  const compressedBytes = await gzipCompress(originalBytes);
+  const compressedSize = compressedBytes.length;
 
-  commonWords.forEach(([word]) => {
-    dictionary.set(word, `[${dictIndex++}]`);
-  });
+  // Convert compressed bytes to base64 for storage
+  const compressedBase64 = uint8ToBase64(compressedBytes);
 
-  // Apply compression
-  let currentText = content;
-  dictionary.forEach((code, word) => {
-    currentText = currentText.split(word).join(code);
-  });
-
-  // Create compressed output with dictionary for decompression
-  const dictionaryArray = Array.from(dictionary.entries());
-  
-  // Calculate target size based on user input
-  let targetSize: number;
-  if (targetSizeBytes && targetSizeBytes > 0) {
-    targetSize = targetSizeBytes;
-  } else {
-    const targetReduction = targetCompressionLevel / 100;
-    targetSize = Math.round(originalSize * (1 - targetReduction));
-  }
-
-  // Iteratively adjust compressed content to match exact target size
-  let adjustedCompressedText = currentText;
-  let compressedWithDict: string;
-  let actualSize: number;
-  let iteration = 0;
-  const maxIterations = 20;
-  const tolerance = 10; // Allow 10 bytes tolerance
-  
-  do {
-    const structure = {
-      version: "1.0",
-      dictionary: dictionaryArray,
-      compressed: adjustedCompressedText,
-      metadata: {
-        originalFileName: fileName,
-        compressionLevel: targetCompressionLevel,
-        targetSize: targetSizeBytes || targetSize,
-        timestamp: new Date().toISOString()
-      }
-    };
-    
-    compressedWithDict = JSON.stringify(structure);
-    actualSize = new Blob([compressedWithDict]).size;
-    
-    // Check if we're within tolerance
-    if (Math.abs(actualSize - targetSize) <= tolerance) {
-      break;
-    }
-    
-    // Adjust content length based on size difference
-    if (actualSize > targetSize) {
-      // Too large - remove characters
-      const bytesOver = actualSize - targetSize;
-      const charsToRemove = Math.max(Math.ceil(bytesOver * 1.1), 1); // Remove a bit more to converge faster
-      adjustedCompressedText = adjustedCompressedText.substring(
-        0, 
-        Math.max(adjustedCompressedText.length - charsToRemove, 50)
-      );
-    } else {
-      // Too small - add padding
-      const bytesUnder = targetSize - actualSize;
-      const charsToAdd = Math.floor(bytesUnder * 0.9); // Add a bit less to converge faster
-      adjustedCompressedText = adjustedCompressedText + " ".repeat(charsToAdd);
-    }
-    
-    iteration++;
-  } while (iteration < maxIterations);
-  
-  // Final structure with adjusted content
-  const finalStructure = {
-    version: "1.0",
-    dictionary: dictionaryArray,
-    compressed: adjustedCompressedText,
-    metadata: {
-      originalFileName: fileName,
-      compressionLevel: targetCompressionLevel,
-      targetSize: targetSizeBytes || targetSize,
-      timestamp: new Date().toISOString()
-    }
-  };
-  
-  compressedWithDict = JSON.stringify(finalStructure);
-  const compressedSize = new Blob([compressedWithDict]).size;
   const compressionRatio = Math.round(
     ((originalSize - compressedSize) / originalSize) * 100
   );
@@ -136,11 +91,11 @@ export const compressData = async (
   return {
     originalSize,
     compressedSize,
-    compressionRatio: Math.max(compressionRatio, 1),
+    compressionRatio: Math.max(compressionRatio, 0),
     redundancyDetected,
-    compressionTime: Math.max(compressionTime, 100),
-    compressedContent: compressedWithDict,
-    originalContent: content,
+    compressionTime: Math.max(compressionTime, 1),
+    compressedContent: compressedBase64,
+    originalContent: base64Content,
     fileName,
   };
 };
